@@ -26,11 +26,15 @@ jobs:
           sed -i 's/(this.licenceStatus?.compareTo(licenceStatus) ?: -1) >= 0/true/g' $FILE
 
       - name: Build Universal Release APK (Unsigned)
-        # تم تغيير الأمر من Debug إلى Release
         run: ./gradlew :myExpenses:packageExternReleaseUniversalApk
 
-      - name: Upload Unsigned Release APK
+      # خطوة إضافية لطباعة مكان الملف الدقيق داخل السجلات
+      - name: Find all APKs (For Debugging)
+        run: find . -type f -name "*.apk"
+
+      - name: Upload All Found APKs
         uses: actions/upload-artifact@v4
         with:
           name: MyExpenses-Universal-Release-Unsigned
-          path: myExpenses/build/outputs/universal_apk/**/*.apk
+          # هذا هو التعديل السحري الذي سيبحث في كل مكان
+          path: '**/*.apk'
