@@ -29,12 +29,13 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      # استخدام نسخة Debug لضمان تجاوز مشكلة تواقيع المفاتيح (Keystore) لتثبيت سلس
-      - name: Build F-Droid Debug APK
-        run: ./gradlew assembleFdroidDebug
+      # تم التصحيح هنا: استخدام المسار الصحيح الموجود في كود المطور
+      - name: Build Extern Debug APK
+        run: ./gradlew assembleExternDebug
 
+      # تم التصحيح هنا: تحديث مسار سحب ملف الـ APK النهائي
       - name: Upload Unlocked APK
         uses: actions/upload-artifact@v4
         with:
           name: MyExpenses-Unlocked
-          path: myExpenses/build/outputs/apk/fdroid/debug/*.apk
+          path: myExpenses/build/outputs/apk/extern/debug/*.apk
