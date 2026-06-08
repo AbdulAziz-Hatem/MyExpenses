@@ -1,0 +1,40 @@
+name: Build Unlocked MyExpenses APK
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout the code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Inject Pro Upgrades Automatically
+        run: |
+          FILE="myExpenses/src/main/java/org/totschnig/myexpenses/util/licence/LicenceHandler.kt"
+          
+          # تغيير مدة الفترة التجريبية من 60 يوماً إلى 99 ألف يوم
+          sed -i 's/const val TRIAL_DURATION_DAYS = 60L/const val TRIAL_DURATION_DAYS = 99999L/g' $FILE
+          
+          # إجبار دالة التحقق من التراخيص على القبول الدائم لفتح الميزات المغلقة بالكامل
+          sed -i 's/(this.licenceStatus?.compareTo(licenceStatus) ?: -1) >= 0/true/g' $FILE
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      # استخدام نسخة Debug لضمان تجاوز مشكلة تواقيع المفاتيح (Keystore) لتثبيت سلس
+      - name: Build F-Droid Debug APK
+        run: ./gradlew assembleFdroidDebug
+
+      - name: Upload Unlocked APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: MyExpenses-Unlocked
+          path: myExpenses/build/outputs/apk/fdroid/debug/*.apk
