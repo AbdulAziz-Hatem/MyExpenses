@@ -29,6 +29,12 @@
         <TextView
             android:id="@+id/aboutVersionCode"
             style="@style/about_text" />
+
+        <TextView
+            android:id="@+id/customBuilderCredit"
+            style="@style/about_text"
+            android:text="@string/custom_builder_credit" />
+
         <!-- Licence -->
         <TextView
             style="@style/headingStyle.WithMargin.Caps"

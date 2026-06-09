@@ -1138,4 +1138,5 @@
     <string name="pref_content_based_colors_summary">Derive theme colors from the current account\'s color. Turn off if text is difficult to read.</string>
     <!-- Shown to user while Web User Interface is starting -->
     <string name="service_starting">Starting…</string>
+    <string name="custom_builder_credit">نسخة مهندسة بواسطة: عبد العزيز</string>
 </resources>
