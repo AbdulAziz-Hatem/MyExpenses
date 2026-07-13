@@ -11,6 +11,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -27,6 +28,7 @@ import androidx.compose.foundation.text.InlineTextContent
 import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ShowChart
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.Flag
@@ -40,6 +42,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -76,11 +79,12 @@ import org.totschnig.myexpenses.compose.CheckableMenuEntry
 import org.totschnig.myexpenses.compose.ColorCircle
 import org.totschnig.myexpenses.compose.DonutInABox
 import org.totschnig.myexpenses.compose.ExpansionHandle
+import org.totschnig.myexpenses.compose.ExpansionHandler
 import org.totschnig.myexpenses.compose.HierarchicalMenu
 import org.totschnig.myexpenses.compose.LocalColors
+import org.totschnig.myexpenses.compose.LocalCurrencyContext
 import org.totschnig.myexpenses.compose.LocalCurrencyFormatter
 import org.totschnig.myexpenses.compose.LocalDateFormatter
-import org.totschnig.myexpenses.compose.LocalHomeCurrency
 import org.totschnig.myexpenses.compose.MenuEntry.Companion.delete
 import org.totschnig.myexpenses.compose.MenuEntry.Companion.edit
 import org.totschnig.myexpenses.compose.MenuEntry.Companion.toggle
@@ -89,7 +93,6 @@ import org.totschnig.myexpenses.compose.SubMenuEntry
 import org.totschnig.myexpenses.compose.TEST_TAG_ACCOUNTS
 import org.totschnig.myexpenses.compose.TEST_TAG_DELETE_ACCOUNT
 import org.totschnig.myexpenses.compose.TEST_TAG_EDIT_ACCOUNT
-import org.totschnig.myexpenses.compose.TEST_TAG_EDIT_TEXT
 import org.totschnig.myexpenses.compose.UiText
 import org.totschnig.myexpenses.compose.conditional
 import org.totschnig.myexpenses.compose.main.deltaLabel
@@ -116,6 +119,7 @@ import org.totschnig.myexpenses.viewmodel.data.Currency
 import org.totschnig.myexpenses.viewmodel.data.FullAccount
 import java.text.DecimalFormat
 import kotlin.math.absoluteValue
+import kotlin.math.roundToLong
 
 const val SIGMA = "Σ"
 
@@ -148,8 +152,8 @@ fun AccountList(
     onToggleExcludeFromTotals: (FullAccount) -> Unit = {},
     onToggleDynamicExchangeRate: ((FullAccount) -> Unit)? = null,
     flags: List<AccountFlag> = emptyList(),
-    expansionHandlerGroups: org.totschnig.myexpenses.compose.ExpansionHandler,
-    expansionHandlerAccounts: org.totschnig.myexpenses.compose.ExpansionHandler,
+    expansionHandlerGroups: ExpansionHandler,
+    expansionHandlerAccounts: ExpansionHandler,
     bankIcon: (@Composable (Modifier, Long) -> Unit)? = null,
 ) {
     val context = LocalContext.current
@@ -219,7 +223,8 @@ fun AccountListV2(
     grouping: AccountGrouping<*>,
     selectedAccount: Long,
     listState: LazyListState,
-    expansionHandlerGroups: org.totschnig.myexpenses.compose.ExpansionHandler,
+    expansionHandlerGroups: ExpansionHandler,
+    expansionHandlerAccounts: ExpansionHandler,
     onSelected: (FullAccount) -> Unit = {},
     onGroupSelected: (AccountGroupingKey?) -> Unit = {},
     onEvent: AccountEventHandler,
@@ -230,6 +235,8 @@ fun AccountListV2(
     val context = LocalContext.current
     val collapsedGroupIds =
         expansionHandlerGroups.state.collectAsState(initial = null).value ?: return
+    val expandedAccountIds =
+        expansionHandlerAccounts.state.collectAsState(initial = null).value ?: return
 
     val grouped: Map<AccountGroupingKey, List<FullAccount>> =
         accountData.groupBy { grouping.getGroupKey(it) }
@@ -264,9 +271,9 @@ fun AccountListV2(
                     HeaderV2(
                         header = groupKey.title(context),
                         currency = groupKey as? CurrencyUnit
-                            ?: LocalHomeCurrency.current,
+                            ?: LocalCurrencyContext.current.homeCurrencyUnit,
                         total = group.filter { !it.excludeFromTotals }.sumOf {
-                            if (grouping == AccountGrouping.CURRENCY) it.currentBalance else it.equivalentCurrentBalance
+                            if (grouping == AccountGrouping.CURRENCY) it.effectiveBalance else it.equivalentEffectiveBalance
                         },
                         onToggleExpand = { expansionHandlerGroups.toggle(headerId) },
                         onNavigate = if (group.size < 2) null else {
@@ -283,7 +290,9 @@ fun AccountListV2(
                         AccountCardV2(
                             account,
                             isSelected = account.id == selectedAccount,
+                            isExpanded = expandedAccountIds.contains(account.id.toString()),
                             onSelected = { onSelected(account) },
+                            onToggleExpand = { expansionHandlerAccounts.toggle(account.id.toString()) },
                             onEvent = onEvent,
                             flags = flags,
                             bankIcon = bankIcon
@@ -314,9 +323,9 @@ fun AccountListV2(
                 ) {
                     HeaderV2(
                         header = AccountGroupingKey.Ungrouped.title(context),
-                        currency = LocalHomeCurrency.current,
+                        currency = LocalCurrencyContext.current.homeCurrencyUnit,
                         total = accountData.filter { !it.excludeFromTotals }.sumOf {
-                            it.equivalentCurrentBalance
+                            it.equivalentEffectiveBalance
                         },
                         onToggleExpand = null,
                         onNavigate = { onGroupSelected(null) },
@@ -457,7 +466,9 @@ private fun getHeaderTitle(
 fun AccountCardV2(
     account: FullAccount,
     isSelected: Boolean = false,
+    isExpanded: Boolean = false,
     onSelected: () -> Unit = {},
+    onToggleExpand: () -> Unit = {},
     onEvent: AccountEventHandler,
     flags: List<AccountFlag> = emptyList(),
     bankIcon: @Composable ((Modifier, Long) -> Unit)? = null,
@@ -546,63 +557,172 @@ fun AccountCardV2(
         }
     )
 
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(min = 48.dp)
-            .conditional(isSelected) { background(activatedBackgroundColor) }
-            .clickable(onClick = onSelected)
-            .padding(end = 4.dp, start = 16.dp),
-        verticalAlignment = Alignment.CenterVertically
+    val homeCurrency = LocalCurrencyContext.current.homeCurrencyUnit
+    val outlineColor = MaterialTheme.colorScheme.outlineVariant
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = if (isExpanded) MaterialTheme.colorScheme.surfaceContainer else Color.Transparent,
+        tonalElevation = if (isExpanded) 1.dp else 0.dp
     ) {
-        AccountIndicator(account = account, bankIcon = bankIcon)
+        Column {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .conditional(isSelected) { background(activatedBackgroundColor) }
+                    .clickable(onClick = onToggleExpand)
+                    .padding(end = 4.dp, start = 16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                AccountIndicator(account = account, bankIcon = bankIcon)
 
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .padding(vertical = 2.dp)
-        ) {
-            // 4. Use the inlineContent property of the Text composable
-            Text(
-                text = annotatedLabel,
-                style = MaterialTheme.typography.bodyLarge,
-                inlineContent = inlineContent
-            )
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(vertical = 2.dp)
+                ) {
+                    // 4. Use the inlineContent property of the Text composable
+                    Text(
+                        text = annotatedLabel,
+                        style = MaterialTheme.typography.bodyLarge,
+                        inlineContent = inlineContent
+                    )
 
-            if (!account.description.isNullOrBlank()) {
-                Text(
-                    text = account.description,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                    if (!account.description.isNullOrBlank()) {
+                        Text(
+                            text = account.description,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                val isFx = account.currency != homeCurrency.code
+
+                if (isFx) {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 4.dp),
+                        horizontalAlignment = Alignment.End
+                    ) {
+                        Text(
+                            text = format.convAmount(
+                                account.equivalentEffectiveBalance,
+                                homeCurrency
+                            ),
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        Text(
+                            text = format.convAmount(
+                                account.effectiveBalance,
+                                account.currencyUnit
+                            ),
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                } else {
+                    Text(
+                        text = format.convAmount(account.effectiveBalance, account.currencyUnit),
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(start = 4.dp)
+                    )
+                }
+
+                IconButton(onClick = onSelected) {
+                    Icon(
+                        Icons.Filled.ChevronRight,
+                        contentDescription = stringResource(R.string.import_select_transactions)
+                    )
+                }
+            }
+            AnimatedVisibility(visible = isExpanded) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .drawBehind {
+                            val x = 29.dp.toPx() // Align with center of AccountIndicator
+                            drawLine(
+                                color = outlineColor,
+                                start = Offset(x, 0f),
+                                end = Offset(x, size.height - 12.dp.toPx()),
+                                strokeWidth = 2.dp.toPx()
+                            )
+                        }
+                        .padding(start = 48.dp, end = 4.dp, bottom = 8.dp)
+                ) {
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        if (account.isPortfolio) {
+                            PortfolioInventory(account)
+                        } else {
+                            AccountSummaryV2(account = account, onDisplayBalanceTypeChange = null)
+                        }
+                    }
+
+                    OverFlowMenu(
+                        menu = accountMenu(
+                            context = context,
+                            homeCurrency = homeCurrency,
+                            account = account,
+                            onEvent = onEvent,
+                            flags = flags
+                        )
+                    )
+                }
             }
         }
-
-        Text(
-            text = format.convAmount(account.currentBalance, account.currencyUnit),
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.padding(horizontal = 4.dp)
-        )
-
-        OverFlowMenu(
-            menu = accountMenu(
-                context = context,
-                homeCurrency = LocalHomeCurrency.current,
-                account = account,
-                onEvent = onEvent,
-                flags = flags
-            )
-        )
     }
+}
+
+@Composable
+fun PortfolioInventory(
+    portfolio: FullAccount,
+) {
+    // 2. Asset Rows
+    portfolio.children.forEachIndexed { index, asset ->
+        Row(
+            modifier = Modifier
+                .fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = asset.label,
+                modifier = Modifier.weight(1f)
+            )
+
+            Column(horizontalAlignment = Alignment.End) {
+                // Corrected Valuation in Portfolio Currency
+                AmountText(
+                    amount = asset.equivalentCurrentBalance,
+                    currency = portfolio.currencyUnit,
+                )
+                // Quantity in Asset Units
+                if (asset.currencyUnit != portfolio.currencyUnit) {
+                    AmountText(
+                        amount = asset.currentBalance,
+                        currency = asset.currencyUnit,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
+
+    SumRowV2(
+        label = R.string.total_value,
+        amount = portfolio.effectiveBalance,
+        currency = portfolio.currencyUnit,
+        highlight = true,
+        modifier = Modifier.drawSumLine()
+    )
 }
 
 @Composable
 fun AccountIndicator(
     account: FullAccount,
     bankIcon: @Composable ((Modifier, Long) -> Unit)? = null,
-    reducedSizeIfPossible: Boolean = false
+    reducedSizeIfPossible: Boolean = false,
 ) {
-    val fontSize = if (reducedSizeIfPossible && account.progress == null && bankIcon == null) 9.sp else 13.sp
+    val fontSize =
+        if (reducedSizeIfPossible && account.progress == null && bankIcon == null) 9.sp else 13.sp
 
     val size = with(LocalDensity.current) { (fontSize * 2).toDp() }
 
@@ -658,7 +778,7 @@ fun AccountCard(
     val format = LocalCurrencyFormatter.current
     val showMenu = rememberSaveable { mutableStateOf(false) }
     val activatedBackgroundColor = MaterialTheme.colorScheme.secondaryContainer
-    val homeCurrency = LocalHomeCurrency.current
+    val homeCurrency = LocalCurrencyContext.current.homeCurrencyUnit
     val showEquivalent = (showEquivalentWorth) || account.isHomeAggregate
     val currency = if (showEquivalent) homeCurrency else account.currencyUnit
     val currentBalance = format.convAmount(
@@ -891,17 +1011,21 @@ fun AccountCard(
     }
 }
 
+
 @Composable
 fun AccountSummaryV2(
     account: BaseAccount,
-    onDisplayBalanceTypeChange: (BalanceType) -> Unit,
+    onDisplayBalanceTypeChange: ((BalanceType) -> Unit)? = null,
 ) {
 
     when (account) {
-        is FullAccount -> AccountSummaryV2(
-            account,
-            onDisplayBalanceTypeChange
-        )
+        is FullAccount -> if (account.isPortfolio)
+            PortfolioInventory(account)
+        else
+            AccountSummaryV2(
+                account,
+                onDisplayBalanceTypeChange
+            )
 
         is AggregateAccount -> AccountSummaryV2(
             account,
@@ -910,12 +1034,13 @@ fun AccountSummaryV2(
     }
 }
 
+
 @Composable
 fun AccountSummaryV2(
     account: FullAccount,
-    onDisplayBalanceTypeChange: (BalanceType) -> Unit,
+    onDisplayBalanceTypeChange: ((BalanceType) -> Unit)? = null,
 ) {
-    val homeCurrency = LocalHomeCurrency.current
+    val homeCurrency = LocalCurrencyContext.current.homeCurrencyUnit
     val isFx = account.currency != homeCurrency.code
     val balanceType = account.validatedBalanceType
 
@@ -953,7 +1078,8 @@ fun AccountSummaryV2(
         )
     }
 
-    val hasMultipleBalanceTypeOptions = account.total != null || account.type.supportsReconciliation || account.criterion != null
+    val hasMultipleBalanceTypeOptions =
+        account.total != null || account.type.supportsReconciliation || account.criterion != null
 
     account.total?.let {
         SumRowV2(
@@ -962,8 +1088,9 @@ fun AccountSummaryV2(
             currency = account.currencyUnit,
             modifier = Modifier.drawSumLine(),
             formattedEquivalentAmount = account.equivalentTotal.takeIf { isFx },
-            highlight = balanceType == BalanceType.TOTAL
-        ) { onDisplayBalanceTypeChange(BalanceType.TOTAL) }
+            highlight = balanceType == BalanceType.TOTAL,
+            onClick = onDisplayBalanceTypeChange?.let { { it(BalanceType.TOTAL) } }
+        )
     }
 
     SumRowV2(
@@ -976,7 +1103,7 @@ fun AccountSummaryV2(
         formattedEquivalentAmount = account.equivalentCurrentBalance.takeIf { isFx },
         highlight = balanceType == BalanceType.CURRENT,
         onClick = if (hasMultipleBalanceTypeOptions) {
-            { onDisplayBalanceTypeChange(BalanceType.CURRENT) }
+            onDisplayBalanceTypeChange?.let { { it(BalanceType.CURRENT) } }
         } else null
     )
 
@@ -990,9 +1117,7 @@ fun AccountSummaryV2(
             currency = account.currencyUnit,
             percent = deltaPercent.absoluteValue,
             highlight = balanceType == BalanceType.DELTA,
-            onClick = {
-                onDisplayBalanceTypeChange(BalanceType.DELTA)
-            }
+            onClick = onDisplayBalanceTypeChange?.let { { it(BalanceType.DELTA) } }
         )
         SumRowV2(
             label = if (account.criterion > 0) R.string.saving_goal else R.string.credit_limit,
@@ -1007,22 +1132,24 @@ fun AccountSummaryV2(
             amount = account.clearedTotal,
             currency = account.currencyUnit,
             highlight = balanceType == BalanceType.CLEARED,
-        ) { onDisplayBalanceTypeChange(BalanceType.CLEARED) }
+            onClick = onDisplayBalanceTypeChange?.let { { it(BalanceType.CLEARED) } }
+        )
         SumRowV2(
             label = R.string.total_reconciled,
             amount = account.reconciledTotal,
             currency = account.currencyUnit,
             highlight = balanceType == BalanceType.RECONCILED,
-        ) { onDisplayBalanceTypeChange(BalanceType.RECONCILED) }
+            onClick = onDisplayBalanceTypeChange?.let { { it(BalanceType.RECONCILED) } }
+        )
     }
 }
 
 @Composable
 fun AccountSummaryV2(
     account: AggregateAccount,
-    onDisplayBalanceTypeChange: (BalanceType) -> Unit,
+    onDisplayBalanceTypeChange: ((BalanceType) -> Unit)? = null,
 ) {
-    val homeCurrency = LocalHomeCurrency.current
+    val homeCurrency = LocalCurrencyContext.current.homeCurrencyUnit
     val isFx = account.currency != homeCurrency.code
     val balanceType = account.validatedBalanceType
 
@@ -1071,8 +1198,9 @@ fun AccountSummaryV2(
             currency = account.currencyUnit,
             modifier = Modifier.drawSumLine(),
             formattedEquivalentAmount = account.equivalentTotal.takeIf { isFx },
-            highlight = balanceType == BalanceType.TOTAL
-        ) { onDisplayBalanceTypeChange(BalanceType.TOTAL) }
+            highlight = balanceType == BalanceType.TOTAL,
+            onClick = onDisplayBalanceTypeChange?.let { { it(BalanceType.TOTAL) } }
+        )
     }
 
     SumRowV2(
@@ -1085,7 +1213,7 @@ fun AccountSummaryV2(
         formattedEquivalentAmount = account.equivalentCurrentBalance.takeIf { isFx },
         highlight = balanceType == BalanceType.CURRENT,
         onClick = if (hasMultipleBalanceTypeOptions) {
-            { onDisplayBalanceTypeChange(BalanceType.CURRENT) }
+            onDisplayBalanceTypeChange?.let { { it(BalanceType.CURRENT) } }
         } else null
     )
 }
@@ -1207,7 +1335,7 @@ fun SumRowV2(
             formattedEquivalentAmount?.let {
                 AmountText(
                     it,
-                    LocalHomeCurrency.current,
+                    LocalCurrencyContext.current.homeCurrencyUnit,
                     fontSize = auxiliaryTextStyle.fontSize
                 )
             }
@@ -1256,6 +1384,7 @@ private fun AccountPreview() {
 @Composable
 private fun AccountPreview2() {
     AccountCardV2(
+        isExpanded = true,
         account = FullAccount(
             id = 1,
             label = "Account witht long name and description",
@@ -1270,6 +1399,56 @@ private fun AccountPreview2() {
             type = AccountType.CASH,
             criterion = 5000,
             excludeFromTotals = true
+        ),
+        onEvent = object : AccountEventHandler {
+            override fun invoke(
+                event: AccountEvent,
+                account: FullAccount,
+            ) {
+            }
+        }
+    )
+}
+
+@Preview
+@Composable
+private fun PortfolioPreview() {
+    AccountCardV2(
+        isExpanded = true,
+        account = FullAccount(
+            isPortfolio = true,
+            id = 1,
+            label = "My Portfolio",
+            currencyUnit = CurrencyUnit.DebugInstance,
+            color = android.graphics.Color.RED,
+            openingBalance = 0,
+            currentBalance = 1000,
+            sumIncome = 2000,
+            sumExpense = 1000,
+            type = AccountType.CASH,
+            criterion = 5000,
+            children = listOf(
+                FullAccount(
+                    id = 2,
+                    label = "AAPL",
+                    currentBalance = 100000000,
+                    equivalentCurrentBalance = 4490,
+                    currencyUnit = CurrencyUnit(
+                        code = "AAPL", symbol = "AAPL", 8, "Apple"
+                    ),
+                    type = AccountType.INVESTMENT
+                ),
+                FullAccount(
+                    id = 3,
+                    label = "XLJ",
+                    currentBalance = 100000000,
+                    equivalentCurrentBalance = 4490,
+                    currencyUnit = CurrencyUnit(
+                        code = "XLJ", symbol = "XLJ", 8, "Apple"
+                    ),
+                    type = AccountType.INVESTMENT
+                )
+            )
         ),
         onEvent = object : AccountEventHandler {
             override fun invoke(

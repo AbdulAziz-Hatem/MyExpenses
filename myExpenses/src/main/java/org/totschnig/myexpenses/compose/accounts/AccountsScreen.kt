@@ -6,17 +6,11 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.input.TextFieldState
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material3.BottomAppBarDefaults
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuAnchorType
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
-import androidx.compose.material3.FloatingActionButton
-import androidx.compose.material3.FloatingActionButtonDefaults
-import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -35,7 +29,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.dimensionResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.rememberTextMeasurer
@@ -44,9 +37,9 @@ import androidx.compose.ui.unit.dp
 import org.totschnig.myexpenses.R
 import org.totschnig.myexpenses.activity.BalanceSheetOptions
 import org.totschnig.myexpenses.activity.BalanceSheetViewInner
-import org.totschnig.myexpenses.compose.TEST_TAG_FAB_ACCOUNTS
 import org.totschnig.myexpenses.compose.main.AppEvent
 import org.totschnig.myexpenses.compose.main.AppEventHandler
+import org.totschnig.myexpenses.compose.main.FloatingActionButtonMenu
 import org.totschnig.myexpenses.model.AccountFlag
 import org.totschnig.myexpenses.model.AccountGrouping
 import org.totschnig.myexpenses.model.AccountGroupingKey
@@ -144,17 +137,16 @@ fun AccountsScreen(
         },
         bottomBar = bottomBar,
         floatingActionButton = {
-            FloatingActionButton(
-                modifier = Modifier.testTag(TEST_TAG_FAB_ACCOUNTS),
-                onClick = { onEvent(AppEvent.CreateAccount) },
-                containerColor = BottomAppBarDefaults.bottomAppBarFabColor,
-                elevation = FloatingActionButtonDefaults.bottomAppBarFabElevation()
-            ) {
-                Icon(
-                    Icons.Default.Add,
-                    contentDescription = stringResource(R.string.menu_create_account)
-                )
-            }
+            FloatingActionButtonMenu(
+                primaryAction = Action.AddAccount,
+                actions = listOf(Action.AddAccount, Action.AddPortfolio),
+                onAction = { action ->
+                    when (action) {
+                        Action.AddAccount -> onEvent(AppEvent.CreateAccount)
+                        Action.AddPortfolio -> onEvent(AppEvent.CreatePortfolio)
+                    }
+                }
+            )
         }
     ) { paddingValues ->
         if (selectedTab.value == AccountsScreenTab.BALANCE_SHEET) {
@@ -196,6 +188,7 @@ fun AccountsScreen(
                 selectedAccount = selectedAccountId,
                 listState = viewModel.listState,
                 expansionHandlerGroups = viewModel.expansionHandler("collapsedHeadersDrawer_${accountGrouping}"),
+                expansionHandlerAccounts = viewModel.expansionHandler("expandedAccounts_${accountGrouping}"),
                 onSelected = {
                     if (accountGrouping != AccountGrouping.NONE) {
                         viewModel.maybeResetFilter(accountGrouping.getGroupKey(it))
