@@ -14,7 +14,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Done
+import androidx.compose.material3.Button
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.DropdownMenuItem
@@ -27,6 +27,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
@@ -43,9 +44,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -85,7 +88,7 @@ import java.time.format.FormatStyle
 @Composable
 fun TradeScreen(
     onDismiss: () -> Unit,
-    onSave: (TradeIntent) -> Unit,
+    onSave: (TradeIntent, Boolean) -> Unit,
     portfolio: FullAccount,
     reportingCurrency: CurrencyUnit,
     assets: List<CurrencyUnit>,
@@ -94,55 +97,96 @@ fun TradeScreen(
     initialTrade: Trade? = null,
     onCreateAsset: suspend (code: String, symbol: String, fractionDigits: Int, label: String?, commodityType: CommodityType) -> CurrencyUnit? = { _, _, _, _, _ -> null },
     isCurrencyUsed: suspend (String) -> Boolean = { false },
-    onLookupMatchingTransactions: (accountId: Long, total: BigDecimal, date: LocalDateTime, isBuy: Boolean) -> Flow<List<Transaction2>> = { _, _, _, _ -> emptyFlow() }
+    onLookupMatchingTransactions: (accountId: Long, total: BigDecimal, date: LocalDateTime, isBuy: Boolean) -> Flow<List<Transaction2>> = { _, _, _, _ -> emptyFlow() },
 ) {
 
     val currencyFormatter = LocalCurrencyFormatter.current
 
-    var selectedSubaccountId by remember {
+    var selectedSubaccountId by rememberSaveable {
         mutableStateOf(initialTrade?.let { trade ->
             portfolio.children.find { it.currencyUnit.code == trade.assetSymbol }?.id
-        } ?: portfolio.children.firstOrNull()?.id)
+        } ?: portfolio.children.find { it.isPortfolioAsset }?.id)
     }
-    var selectedAsset by remember {
+    var selectedAsset by rememberSaveable {
         mutableStateOf(initialTrade?.let { trade ->
             assets.find { it.code == trade.assetSymbol }
                 ?: portfolio.children.find { it.currencyUnit.code == trade.assetSymbol }?.currencyUnit
         } ?: portfolio.children.firstOrNull { !it.type.isCashAccount }?.currencyUnit)
     }
 
-    var type by remember {
-        mutableStateOf(initialTrade?.type ?: when (initialAction) {
-            Action.Sell -> TradeType.AssetTrade.SELL
-            Action.Deposit -> TradeType.CashMovement.DEPOSIT
-            Action.Withdraw -> TradeType.CashMovement.WITHDRAW
-            else -> TradeType.AssetTrade.BUY
-        })
+    var type by rememberSaveable {
+        mutableStateOf(
+            initialTrade?.type ?: when (initialAction) {
+                Action.Sell -> TradeType.AssetTrade.SELL
+                Action.Deposit -> TradeType.CashMovement.DEPOSIT
+                Action.Withdraw -> TradeType.CashMovement.WITHDRAW
+                else -> TradeType.AssetTrade.BUY
+            }
+        )
     }
     val isAssetTrade = type is TradeType.AssetTrade
-    var date by remember { mutableStateOf(initialTrade?.date?.toLocalDateTime() ?: LocalDateTime.now()) }
-    var quantity by remember { mutableStateOf(initialTrade?.quantity?.amountMajor) }
-    var price by remember { mutableStateOf(initialTrade?.price) }
-    var fee by remember { mutableStateOf(initialTrade?.fee?.amountMajor) }
-    var fundingSource by remember {
+
+    var dateMillis by rememberSaveable {
+        mutableLongStateOf((initialTrade?.date?.toEpochSecond()?.times(1000)) ?: Instant.now().toEpochMilli())
+    }
+
+    val date = remember(dateMillis) {
+        Instant.ofEpochMilli(dateMillis).atZone(ZoneId.systemDefault()).toLocalDateTime()
+    }
+
+    var quantity by rememberSaveable {
+        mutableStateOf(initialTrade?.quantity?.amountMajor)
+    }
+    var price by rememberSaveable {
+        mutableStateOf(initialTrade?.price)
+    }
+    var fee by rememberSaveable {
+        mutableStateOf(initialTrade?.fee?.amountMajor)
+    }
+
+    var fundingSource by rememberSaveable {
         mutableStateOf(initialTrade?.let { trade ->
-            when {
-                trade.fundingAccountLabel == null && trade.type is TradeType.AssetTrade -> FundingSource.PORTFOLIO
-                fundingAccounts.any { it.second == trade.fundingAccountLabel } -> FundingSource.ACCOUNT
-                else -> FundingSource.EXTERNAL
-            }
+            if (trade.fundingAccount != null) {
+                if (fundingAccounts.any { it.first == trade.fundingAccount.first }) FundingSource.ACCOUNT else FundingSource.PORTFOLIO
+            } else FundingSource.EXTERNAL
         } ?: FundingSource.EXTERNAL)
     }
-    var fundingAccountId by remember {
-        mutableStateOf(initialTrade?.let { trade ->
-            fundingAccounts.find { it.second == trade.fundingAccountLabel }?.first
-        })
+    var fundingAccountId by rememberSaveable {
+        mutableStateOf(initialTrade?.fundingAccount?.first)
     }
 
-    var comment by remember { mutableStateOf(initialTrade?.comment ?: "") }
-    var linkedTransactionId by remember { mutableStateOf<Long?>(null) }
+    var comment by rememberSaveable { mutableStateOf(initialTrade?.comment ?: "") }
+    var linkedTransactionId by rememberSaveable { mutableStateOf<Long?>(null) }
 
     val coroutineScope = rememberCoroutineScope()
+
+    val canSave = (isAssetTrade && selectedAsset != null && quantity != null) || (!isAssetTrade && quantity != null)
+
+    val onSaveClick = { stayOpen: Boolean ->
+        val asset = if (isAssetTrade) selectedAsset!! else reportingCurrency
+        onSave(
+            TradeIntent(
+                type = type,
+                date = date,
+                targetAsset = asset,
+                quantity = quantity.orZero,
+                price = if (isAssetTrade) price.orZero else BigDecimal.ONE,
+                fundingAccountId = fundingAccountId,
+                fee = fee.orZero,
+                comment = comment,
+                fundingSource = fundingSource,
+                linkedTransactionId = linkedTransactionId
+            ),
+            stayOpen
+        )
+        if (stayOpen) {
+            quantity = null
+            price = null
+            fee = null
+            comment = ""
+            linkedTransactionId = null
+        }
+    }
 
     val principal = remember(quantity, price, type) {
         if (type is TradeType.AssetTrade) {
@@ -171,7 +215,8 @@ fun TradeScreen(
 
     LaunchedEffect(matchingTransactions) {
         if (matchingTransactions.none { it.id == linkedTransactionId }) {
-            linkedTransactionId = if (matchingTransactions.size == 1) matchingTransactions.first().id else null
+            linkedTransactionId =
+                if (matchingTransactions.size == 1) matchingTransactions.first().id else null
         }
     }
 
@@ -202,7 +247,7 @@ fun TradeScreen(
     var showTimePicker by remember { mutableStateOf(false) }
 
     val datePickerState = rememberDatePickerState(
-        initialSelectedDateMillis = date.toEpochMillis()
+        initialSelectedDateMillis = dateMillis
     )
     val timePickerState = rememberTimePickerState(
         initialHour = date.hour,
@@ -215,10 +260,9 @@ fun TradeScreen(
             confirmButton = {
                 TextButton(onClick = {
                     datePickerState.selectedDateMillis?.let { millis ->
-                        val selectedDate =
-                            Instant.ofEpochMilli(millis).atZone(ZoneId.systemDefault())
-                                .toLocalDate()
-                        date = date.with(selectedDate)
+                        dateMillis = Instant.ofEpochMilli(millis).atZone(ZoneId.systemDefault())
+                            .toLocalDateTime().withHour(date.hour).withMinute(date.minute)
+                            .toEpochMillis()
                     }
                     showDatePicker = false
                 }) {
@@ -254,8 +298,8 @@ fun TradeScreen(
                             Text(stringResource(android.R.string.cancel))
                         }
                         TextButton(onClick = {
-                            date = date.withHour(timePickerState.hour)
-                                .withMinute(timePickerState.minute)
+                            dateMillis = date.withHour(timePickerState.hour)
+                                .withMinute(timePickerState.minute).toEpochMillis()
                             showTimePicker = false
                         }) {
                             Text(stringResource(android.R.string.ok))
@@ -301,34 +345,35 @@ fun TradeScreen(
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null)
                     }
                 },
-                actions = {
-                    IconButton(
-                        enabled = (isAssetTrade && selectedAsset != null && quantity != null) || (!isAssetTrade && quantity != null),
-                        onClick = {
-                            val asset = if (isAssetTrade) selectedAsset!! else reportingCurrency
-                            onSave(
-                                TradeIntent(
-                                    type = type,
-                                    date = date,
-                                    targetAccountId = if (isAssetTrade) selectedSubaccountId else null,
-                                    targetAsset = asset,
-                                    quantity = quantity.orZero,
-                                    price = if (isAssetTrade) price.orZero else BigDecimal.ONE,
-                                    fundingAccountId = fundingAccountId,
-                                    fee = fee.orZero,
-                                    comment = comment,
-                                    fundingSource = fundingSource,
-                                    linkedTransactionId = linkedTransactionId
-                                )
-                            )
-                    }) {
-                        Icon(
-                            Icons.Default.Done,
-                            contentDescription = stringResource(R.string.menu_save)
-                        )
+                actions = {}
+            )
+        },
+        bottomBar = {
+            Surface(tonalElevation = 2.dp) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    if (initialTrade == null) {
+                        OutlinedButton(
+                            onClick = { onSaveClick(true) },
+                            modifier = Modifier.weight(1f),
+                            enabled = canSave
+                        ) {
+                            Text(stringResource(R.string.menu_save_and_new))
+                        }
+                    }
+                    Button(
+                        onClick = { onSaveClick(false) },
+                        modifier = Modifier.weight(1f),
+                        enabled = canSave
+                    ) {
+                        Text(stringResource(R.string.menu_save))
                     }
                 }
-            )
+            }
         }
     ) { paddingValues ->
         Column(
@@ -409,7 +454,8 @@ fun TradeScreen(
                     AmountEdit(
                         value = quantity,
                         onValueChange = { quantity = it },
-                        fractionDigits = (if (isAssetTrade) selectedAsset else reportingCurrency)?.fractionDigits ?: 2,
+                        fractionDigits = (if (isAssetTrade) selectedAsset else reportingCurrency)?.fractionDigits
+                            ?: 2,
                         enabled = !isAssetTrade || selectedAsset != null
                     )
                     if (type == TradeType.AssetTrade.SELL || type == TradeType.CashMovement.WITHDRAW) {
@@ -469,11 +515,14 @@ fun TradeScreen(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
-                    stringResource(R.string.trade_principal),
+                    stringResource(R.string.value),
                     style = MaterialTheme.typography.bodyMedium
                 )
                 Text(
-                    currencyFormatter.formatCurrency(principal ?: BigDecimal.ZERO, reportingCurrency),
+                    currencyFormatter.formatCurrency(
+                        principal ?: BigDecimal.ZERO,
+                        reportingCurrency
+                    ),
                     style = MaterialTheme.typography.bodyLarge
                 )
             }
@@ -497,7 +546,7 @@ fun TradeScreen(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
-                    stringResource(R.string.trade_total_outlay),
+                    stringResource(R.string.menu_aggregates),
                     style = MaterialTheme.typography.bodyMedium
                 )
                 Text(
@@ -508,7 +557,7 @@ fun TradeScreen(
 
             // Funding Account Selection
             FundingSourceSelector(
-                label = stringResource(R.string.trade_funding_account),
+                label = stringResource(R.string.trade_funding_source),
                 portfolio = portfolio,
                 selectedSource = fundingSource,
                 selectedAccountId = fundingAccountId,
@@ -531,13 +580,18 @@ fun TradeScreen(
                         FilterChip(
                             selected = linkedTransactionId == transaction.id,
                             onClick = {
-                                linkedTransactionId = if (linkedTransactionId == transaction.id) null else transaction.id
+                                linkedTransactionId =
+                                    if (linkedTransactionId == transaction.id) null else transaction.id
                             },
                             label = {
                                 Column {
-                                    (transaction.party?.name ?: transaction.comment)?.let { Text(it) }
+                                    (transaction.party?.name
+                                        ?: transaction.comment)?.let { Text(it) }
                                     Text(
-                                        currencyFormatter.formatCurrency(transaction.displayAmount.amountMajor, reportingCurrency),
+                                        currencyFormatter.formatCurrency(
+                                            transaction.displayAmount.amountMajor,
+                                            reportingCurrency
+                                        ),
                                         style = MaterialTheme.typography.labelSmall
                                     )
                                 }
@@ -561,7 +615,6 @@ fun TradeScreen(
     }
 }
 
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AssetSelector(
@@ -573,43 +626,20 @@ fun AssetSelector(
     onCreateAsset: (Pair<String, CommodityType>) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(false) }
-    var searchQuery by remember { mutableStateOf(selectedAsset?.code ?: "") }
-
-    LaunchedEffect(selectedAsset) {
-        searchQuery = selectedAsset?.code ?: ""
-    }
 
     var selectedTypes by remember {
         mutableStateOf(setOf(CommodityType.SECURITY, CommodityType.CRYPTO))
     }
 
-    val isFilterActive = remember(searchQuery, selectedAsset) {
-        searchQuery.isNotBlank() && searchQuery != selectedAsset?.code
+    val filteredSubaccounts = remember(selectedTypes, subaccounts) {
+        subaccounts.filter { it.currencyUnit.commodityType in selectedTypes }
     }
 
-    val filteredSubaccounts = remember(searchQuery, selectedTypes, subaccounts, isFilterActive) {
-        subaccounts.filter {
-            it.currencyUnit.commodityType in selectedTypes &&
-                    (!isFilterActive ||
-                            it.label.contains(searchQuery, ignoreCase = true) ||
-                            it.currencyUnit.code.contains(searchQuery, ignoreCase = true))
-        }
-    }
-
-    val filteredAssets = remember(searchQuery, selectedTypes, assets, subaccounts, isFilterActive) {
+    val filteredAssets = remember(selectedTypes, assets, subaccounts) {
         val subaccountCodes = subaccounts.map { it.currencyUnit.code }
         assets.filter { asset ->
-            asset.commodityType in selectedTypes &&
-                    asset.code !in subaccountCodes &&
-                    (!isFilterActive ||
-                            asset.code.contains(searchQuery, ignoreCase = true) ||
-                            asset.description.contains(searchQuery, ignoreCase = true))
+            asset.commodityType in selectedTypes && asset.code !in subaccountCodes
         }.take(20)
-    }
-
-    val exactMatchExists = remember(searchQuery, subaccounts, assets) {
-        subaccounts.any { it.currencyUnit.code.equals(searchQuery, ignoreCase = true) } ||
-                assets.any { it.code.equals(searchQuery, ignoreCase = true) }
     }
 
     ExposedDropdownMenuBox(
@@ -617,15 +647,13 @@ fun AssetSelector(
         onExpandedChange = { expanded = !expanded }
     ) {
         OutlinedTextField(
-            value = searchQuery,
-            onValueChange = {
-                searchQuery = it
-                expanded = true
-            },
+            value = selectedAsset?.description ?: "",
+            onValueChange = {},
+            readOnly = true,
             label = { Text(label) },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
             modifier = Modifier
-                .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryEditable)
+                .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
                 .fillMaxWidth(),
             colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors()
         )
@@ -649,7 +677,8 @@ fun AssetSelector(
                                     selectedTypes - type
                                 } else {
                                     // If toggling off the only selected type, switch to the other types
-                                    CommodityType.entries.filter { it != CommodityType.FIAT && it != type }.toSet()
+                                    CommodityType.entries.filter { it != CommodityType.FIAT && it != type }
+                                        .toSet()
                                 }
                             } else {
                                 selectedTypes + type
@@ -668,16 +697,21 @@ fun AssetSelector(
                     val isSelected = account.currencyUnit.code == selectedAsset?.code
                     DropdownMenuItem(
                         text = {
-                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Column(
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
                                 Text("${account.label} (${account.currencyUnit.code})")
-                                AmountText(amount = account.currentBalance, currency = account.currencyUnit)
+                                AmountText(
+                                    amount = account.currentBalance,
+                                    currency = account.currencyUnit,
+                                    currencySymbol = ""
+                                )
                             }
                         },
                         leadingIcon = if (isSelected) {
                             { Icon(Icons.Default.Check, contentDescription = null) }
                         } else null,
                         onClick = {
-                            searchQuery = account.currencyUnit.code
                             onSelectionChanged(account.currencyUnit, account.id)
                             expanded = false
                         }
@@ -695,7 +729,6 @@ fun AssetSelector(
                             { Icon(Icons.Default.Check, contentDescription = null) }
                         } else null,
                         onClick = {
-                            searchQuery = asset.code
                             onSelectionChanged(asset, null)
                             expanded = false
                         }
@@ -703,20 +736,15 @@ fun AssetSelector(
                 }
             }
 
-            if (searchQuery.isBlank() || (!exactMatchExists && isFilterActive)) {
-                HorizontalDivider()
-                DropdownMenuItem(
-                    text = { Text(stringResource(R.string.menu_add)) },
-                    leadingIcon = { Icon(Icons.Default.Add, contentDescription = null) },
-                    onClick = {
-                        onCreateAsset(
-                            (if (isFilterActive) searchQuery else "") to (selectedTypes.firstOrNull()
-                                ?: CommodityType.SECURITY)
-                        )
-                        expanded = false
-                    }
-                )
-            }
+            HorizontalDivider()
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.menu_add)) },
+                leadingIcon = { Icon(Icons.Default.Add, contentDescription = null) },
+                onClick = {
+                    onCreateAsset("" to (selectedTypes.firstOrNull() ?: CommodityType.SECURITY))
+                    expanded = false
+                }
+            )
         }
     }
 }
@@ -730,12 +758,12 @@ fun FundingSourceSelector(
     selectedAccountId: Long?,
     accounts: List<Pair<Long, String>>,
     onSourceSelected: (FundingSource, Long?) -> Unit,
-    showPortfolio: Boolean = true
+    showPortfolio: Boolean = true,
 ) {
     var expanded by remember { mutableStateOf(false) }
     val selectedText = when (selectedSource) {
         FundingSource.PORTFOLIO -> stringResource(R.string.trade_funding_portfolio) + " (${portfolio.label})"
-        FundingSource.EXTERNAL -> stringResource(R.string.trade_funding_external)
+        FundingSource.EXTERNAL -> stringResource(R.string.trade_funding_external_description)
         FundingSource.ACCOUNT -> accounts.find { it.first == selectedAccountId }?.second ?: ""
     }
 
@@ -752,12 +780,19 @@ fun FundingSourceSelector(
             if (showPortfolio) {
                 DropdownMenuItem(
                     text = {
-                        Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            Arrangement.SpaceBetween,
+                            Alignment.CenterVertically
+                        ) {
                             Column {
                                 Text(stringResource(R.string.trade_funding_portfolio))
                                 Text(portfolio.label, style = MaterialTheme.typography.labelSmall)
                             }
-                            AmountText(amount = portfolio.children.find { it.type.isCashAccount }?.currentBalance ?: 0L, currency = portfolio.currencyUnit)
+                            AmountText(
+                                amount = portfolio.children.find { it.type.isCashAccount }?.currentBalance
+                                    ?: 0L, currency = portfolio.currencyUnit
+                            )
                         }
                     },
                     leadingIcon = if (selectedSource == FundingSource.PORTFOLIO) {
@@ -769,10 +804,10 @@ fun FundingSourceSelector(
             // Group 2: External
             DropdownMenuItem(
                 text = {
-                    Column {
-                        Text(stringResource(R.string.trade_funding_external))
-                        Text(stringResource(R.string.trade_funding_external_description), style = MaterialTheme.typography.labelSmall)
-                    }
+                    Text(
+                        stringResource(R.string.trade_funding_external_description),
+                        style = MaterialTheme.typography.labelSmall
+                    )
                 },
                 leadingIcon = if (selectedSource == FundingSource.EXTERNAL) {
                     { Icon(Icons.Default.Check, contentDescription = null) }
@@ -782,13 +817,16 @@ fun FundingSourceSelector(
             HorizontalDivider()
             // Group 3: Other Accounts
             accounts.forEach { account ->
-                val isSelected = selectedSource == FundingSource.ACCOUNT && selectedAccountId == account.first
+                val isSelected =
+                    selectedSource == FundingSource.ACCOUNT && selectedAccountId == account.first
                 DropdownMenuItem(
                     text = { Text(account.second) },
                     leadingIcon = if (isSelected) {
                         { Icon(Icons.Default.Check, contentDescription = null) }
                     } else null,
-                    onClick = { onSourceSelected(FundingSource.ACCOUNT, account.first); expanded = false }
+                    onClick = {
+                        onSourceSelected(FundingSource.ACCOUNT, account.first); expanded = false
+                    }
                 )
             }
         }
@@ -803,7 +841,7 @@ val BigDecimal?.orZero: BigDecimal
 fun TradeScreenPreview() {
     TradeScreen(
         onDismiss = {},
-        onSave = {},
+        onSave = { _, _ -> },
         portfolio = FullAccount(
             id = 1,
             label = "Portfolio",

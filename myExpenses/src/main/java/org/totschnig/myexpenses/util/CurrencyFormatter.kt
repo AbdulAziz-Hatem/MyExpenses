@@ -40,8 +40,7 @@ fun ICurrencyFormatter.formatMoney(
     money: Money,
     configure: ((DecimalFormat) -> Unit)? = null,
 ): String {
-    val amount = money.amountMajor
-    return formatCurrency(amount, money.currencyUnit, configure)
+    return formatCurrency(money.amountMajor, money.currencyUnit, configure)
 }
 
 /**
@@ -50,8 +49,12 @@ fun ICurrencyFormatter.formatMoney(
  *
  * @return formatted string
  */
-fun ICurrencyFormatter.convAmount(amount: Long, currency: CurrencyUnit): String {
-    return formatMoney(Money(currency, amount))
+fun ICurrencyFormatter.convAmount(
+    amount: Long,
+    currency: CurrencyUnit,
+    configure: ((DecimalFormat) -> Unit)? = null,
+): String {
+    return formatMoney(Money(currency, amount), configure)
 }
 
 open class CurrencyFormatter(

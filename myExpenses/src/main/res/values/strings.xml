@@ -23,7 +23,6 @@
     <string name="account_type_ccard">Credit card</string>
     <string name="account_type_liability">Other Liabilities</string>
     <string name="account_type_investment">Investments</string>
-    <string name="account_type_portfolio">Portfolio</string>
     <string name="already_defined">%1$s already defined</string>
     <string name="amount">Amount</string>
     <string name="app_name">My Expenses</string>
@@ -173,9 +172,6 @@
     <!-- Resetting a plan instance means deleting a transaction that has been created for this instances, or removing the cancel flag -->
     <string name="menu_reset_plan_instance">Reset</string>
     <string name="menu_save">Save</string>
-    <string name="trade_bought">Bought</string>
-    <string name="trade_sold">Sold</string>
-    <string name="valuation">Valuation</string>
     <string name="menu_save_and_new">Save and new</string>
     <string name="menu_share">Tell a friend</string>
     <string name="button_label_close">Close</string>
@@ -1146,10 +1142,8 @@
     <string name="trade_quantity">Quantity</string>
     <string name="trade_price">Price</string>
     <string name="trade_fee">Fee</string>
-    <string name="trade_principal">Principal</string>
-    <string name="trade_total_outlay">Total</string>
-    <string name="trade_funding_account">Funding Account</string>
     <string name="trade_target_asset">Asset</string>
+    <!-- Label for the action to create a new portfolio, which is a container for investment assets and cash -->
     <string name="menu_create_portfolio">New portfolio</string>
     <!-- Label for the category of fiat currencies (e.g., USD, EUR). Plural. -->
     <string name="asset_type_fiat_plural">Currencies</string>
@@ -1159,11 +1153,17 @@
     <string name="asset_type_security_plural">Securities</string>
     <!-- Collective noun for cryptocurrencies (e.g., Bitcoin, Ethereum). Translators should use the common local term for this asset class. -->
     <string name="asset_type_crypto">Crypto</string>
+    <!-- On the Screen, where Trades are recording, this refers to the dropdown for selecting how the cost is funded, or where the proceeds should land -->
     <string name="trade_funding_source">Funding Source</string>
+    <!-- Option in the "Funding Source" selector for a trade, referring to the cash balance held within the portfolio itself. -->
     <string name="trade_funding_portfolio">Portfolio Cash</string>
-    <string name="trade_funding_external">External (Untracked)</string>
     <string name="trade_funding_external_description">Funds from sources not tracked in this app</string>
     <string name="trade_deposit">Deposit</string>
     <string name="trade_withdraw">Withdrawal</string>
     <string name="trade_matching_transaction_found">Matching transaction found in funding account. Select to link:</string>
+    <!-- Label for asset valuation: %1$s: Quantity, %2$s: Unit price in portfolio currency (e.g., "150.00 USD") -->
+    <string name="asset_quantity_at_price">%1$s @ %2$s</string>
+    <string name="contrib_feature_portfolio_tracking">Portfolio tracking</string>
+    <string name="premium_nudge_portfolio_title">Unlock full portfolio potential</string>
+    <string name="premium_nudge_portfolio_message">You can manage one portfolio for free. Upgrade to manage multiple portfolios and unlock advanced tracking features.</string>
 </resources>

@@ -49,6 +49,7 @@ import org.totschnig.myexpenses.compose.main.AppEvent
 import org.totschnig.myexpenses.compose.main.AppEventHandler
 import org.totschnig.myexpenses.compose.main.MainScreenAdaptive
 import org.totschnig.myexpenses.compose.transactions.Action
+import org.totschnig.myexpenses.compose.transactions.ImportTradesDialog
 import org.totschnig.myexpenses.compose.transactions.TradeEvent
 import org.totschnig.myexpenses.compose.transactions.TradeList
 import org.totschnig.myexpenses.compose.transactions.TradeScreen
@@ -58,6 +59,8 @@ import org.totschnig.myexpenses.injector
 import org.totschnig.myexpenses.model.ContribFeature
 import org.totschnig.myexpenses.model.CrStatus
 import org.totschnig.myexpenses.model.CurrencyUnit
+import org.totschnig.myexpenses.provider.KEY_COMMODITY
+import org.totschnig.myexpenses.provider.KEY_CURRENCY
 import org.totschnig.myexpenses.provider.KEY_SORT_KEY
 import org.totschnig.myexpenses.util.ads.AdHandlerV2
 import org.totschnig.myexpenses.util.crashreporting.CrashHandler.Companion.report
@@ -90,6 +93,9 @@ class MyExpensesV2 : BaseMyExpenses<MyExpensesV2ViewModel>(),
     private val currencyViewModel: CurrencyViewModel by viewModels()
 
     private lateinit var adHandler: AdHandlerV2
+
+    private var showPortfolioSetup by mutableStateOf(false)
+    private var portfolioToEditId by mutableStateOf<Long?>(null)
 
     override fun handleRootWindowInsets() {}
 
@@ -125,6 +131,14 @@ class MyExpensesV2 : BaseMyExpenses<MyExpensesV2ViewModel>(),
 
         if (!adHandled) {
             reviewManager.onEditTransactionResult(this)
+        }
+    }
+
+    override fun editAccount(account: FullAccount) {
+        if (account.isPortfolio) {
+            portfolioToEditId = account.id
+        } else {
+            super.editAccount(account)
         }
     }
 
@@ -216,19 +230,35 @@ class MyExpensesV2 : BaseMyExpenses<MyExpensesV2ViewModel>(),
                         val banks = viewModel.banks.collectAsState()
                         val showSortDialog = rememberSaveable { mutableStateOf(false) }
                         var isNavigationVisible by rememberSaveable { mutableStateOf(false) }
-                        var showPortfolioSetup by rememberSaveable { mutableStateOf(false) }
+                        var showImportTrades by rememberSaveable { mutableStateOf(false) }
+                        val portfolioToEdit =
+                            portfolioToEditId?.let { id -> accounts.find { it.id == id } }
 
                         val currencies by currencyViewModel.currencyUnits.collectAsState(emptyList())
 
-                        if (showPortfolioSetup) {
+                        if (showPortfolioSetup || portfolioToEditId != null) {
                             PortfolioSetupDialog(
-                                onDismiss = { showPortfolioSetup = false },
-                                onConfirm = { label, currency, color ->
-                                    viewModel.createPortfolio(label, currency, color)
+                                onDismiss = {
                                     showPortfolioSetup = false
+                                    portfolioToEditId = null
+                                },
+                                onConfirm = { label, currency, color ->
+                                    if (portfolioToEditId != null) {
+                                        viewModel.updatePortfolio(
+                                            portfolioToEditId!!,
+                                            label,
+                                            currency,
+                                            color
+                                        )
+                                    } else {
+                                        viewModel.createPortfolio(label, currency, color)
+                                    }
+                                    showPortfolioSetup = false
+                                    portfolioToEditId = null
                                 },
                                 availableCurrencies = currencies,
-                                selectedCurrency = currencyContext.homeCurrencyUnit
+                                selectedCurrency = currencyContext.homeCurrencyUnit,
+                                initialPortfolio = portfolioToEdit
                             )
                         }
 
@@ -240,7 +270,13 @@ class MyExpensesV2 : BaseMyExpenses<MyExpensesV2ViewModel>(),
                             selectedAccountId = selectedAccountIdFromState,
                             isCurrencyUsed = { currencyViewModel.isCurrencyUsed(it) },
                             onCreateAsset = { code, symbol, fractionDigits, label, type ->
-                                currencyViewModel.createAsset(code, symbol, fractionDigits, label, type)
+                                currencyViewModel.createAsset(
+                                    code,
+                                    symbol,
+                                    fractionDigits,
+                                    label,
+                                    type
+                                )
                             },
                             onAppEvent = object : AppEventHandler {
                                 override fun invoke(event: AppEvent) {
@@ -281,10 +317,10 @@ class MyExpensesV2 : BaseMyExpenses<MyExpensesV2ViewModel>(),
                                             event.itemId
                                         )
 
-                                        is AppEvent.MenuItemClicked -> dispatchCommand(
-                                            event.itemId,
-                                            event.tag
-                                        )
+                                        is AppEvent.MenuItemClicked -> when(event.itemId) {
+                                            R.id.IMPORT_TRADES_COMMAND -> showImportTrades = true
+                                            else -> dispatchCommand(event.itemId, event.tag)
+                                        }
 
                                         AppEvent.Sort -> showSortDialog.value = true
 
@@ -297,6 +333,11 @@ class MyExpensesV2 : BaseMyExpenses<MyExpensesV2ViewModel>(),
                                                 viewModel.saveTrade(it, event.intent)
                                             }
                                         }
+
+                                        is AppEvent.ShowUpgrade -> contribFeatureRequested(
+                                            event.feature,
+                                            true
+                                        )
                                     }
                                 }
                             },
@@ -321,6 +362,16 @@ class MyExpensesV2 : BaseMyExpenses<MyExpensesV2ViewModel>(),
                                         )
 
                                         is AccountEvent.ToggleSealed -> toggleAccountSealed(account)
+                                        is AccountEvent.ViewPriceHistory -> {
+                                            val intent = Intent(
+                                                this@MyExpensesV2,
+                                                PriceHistory::class.java
+                                            ).apply {
+                                                putExtra(KEY_COMMODITY, event.commodity)
+                                                putExtra(KEY_CURRENCY, account.currencyUnit.code)
+                                            }
+                                            startActivity(intent)
+                                        }
                                     }
                                 }
 
@@ -343,13 +394,41 @@ class MyExpensesV2 : BaseMyExpenses<MyExpensesV2ViewModel>(),
                             isNavigationVisible = isNavigationVisible
                         ) { pageAccount, isCurrent ->
                             if (pageAccount.isPortfolio) {
-                                PortfolioPage(pageAccount, currencies, viewModel.accountList.collectAsState().value)
+                                PortfolioPage(
+                                    pageAccount,
+                                    currencies,
+                                    viewModel.accountList.collectAsState().value
+                                )
                             } else {
                                 Page(
                                     pageAccount,
                                     accounts.size,
                                     isCurrent,
                                     v2 = true
+                                )
+                            }
+                        }
+
+                        if (showImportTrades) {
+                            (currentAccount as? FullAccount)?.let { fullAccount ->
+                                ImportTradesDialog(
+                                    onDismiss = { showImportTrades = false },
+                                    onImport = { intents ->
+                                        lifecycleScope.launch {
+                                            viewModel.saveTrades(fullAccount, intents)
+                                        }
+                                    },
+                                    portfolio = fullAccount,
+                                    assets = currencies,
+                                    fundingAccounts = accounts
+                                        .filter {
+                                            !it.isPortfolio &&
+                                                    it.currencyUnit.code == fullAccount.currencyUnit.code &&
+                                                    it.id != fullAccount.id
+                                        }
+                                        .map {
+                                            it.id to it.labelV2(this@MyExpensesV2)
+                                        }
                                 )
                             }
                         }
@@ -445,6 +524,7 @@ class MyExpensesV2 : BaseMyExpenses<MyExpensesV2ViewModel>(),
                         TradeEvent.Edit -> {
                             tradeToEdit = trade
                         }
+
                         TradeEvent.Delete -> {
                             lifecycleScope.launch {
                                 // Trades are usually unreconciled upon creation
@@ -456,32 +536,38 @@ class MyExpensesV2 : BaseMyExpenses<MyExpensesV2ViewModel>(),
             )
         }
         tradeToEdit?.let { trade ->
-            val fullAccount = accountList.find { it.id == account.id } as? FullAccount
-            if (fullAccount != null) {
+            (accountList.find { it.id == account.id } as? FullAccount)?.let { fullAccount ->
                 Dialog(
                     onDismissRequest = { tradeToEdit = null },
                     properties = DialogProperties(usePlatformDefaultWidth = false)
                 ) {
                     TradeScreen(
                         onDismiss = { tradeToEdit = null },
-                        onSave = { intent ->
+                        onSave = { intent, stayOpen ->
                             viewModel.saveTrade(fullAccount, intent, trade.id)
-                            tradeToEdit = null
+                            if (!stayOpen) tradeToEdit = null
                         },
                         portfolio = fullAccount,
                         reportingCurrency = fullAccount.currencyUnit,
                         assets = allCurrencies,
                         fundingAccounts = accountList
+                            .filterIsInstance<FullAccount>()
                             .filter {
-                                !it.isAggregate && it.currencyUnit.code == fullAccount.currencyUnit.code &&
-                                        it.id != fullAccount.id
+                                !it.isPortfolio &&
+                                        it.currencyUnit.code == fullAccount.currencyUnit.code
                             }
                             .map {
                                 it.id to it.labelV2(this)
                             },
                         initialTrade = trade,
                         onLookupMatchingTransactions = { accountId, total, date, isBuy ->
-                            viewModel.findMatchingTransactions(accountId, total, date, fullAccount.currencyUnit, isBuy)
+                            viewModel.findMatchingTransactions(
+                                accountId,
+                                total,
+                                date,
+                                fullAccount.currencyUnit,
+                                isBuy
+                            )
                         }
                     )
                 }

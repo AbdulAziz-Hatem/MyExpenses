@@ -11,7 +11,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -28,7 +27,6 @@ import androidx.compose.foundation.text.InlineTextContent
 import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ShowChart
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.Flag
@@ -42,7 +40,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -67,9 +64,12 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.Placeholder
 import androidx.compose.ui.text.PlaceholderVerticalAlign
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -110,6 +110,7 @@ import org.totschnig.myexpenses.model.CurrencyUnit
 import org.totschnig.myexpenses.model.DEFAULT_FLAG_ID
 import org.totschnig.myexpenses.provider.DataBaseAccount.Companion.AGGREGATE_HOME_CURRENCY_CODE
 import org.totschnig.myexpenses.provider.DataBaseAccount.Companion.HOME_AGGREGATE_ID
+import org.totschnig.myexpenses.provider.PORTFOLIO_CONTAINER
 import org.totschnig.myexpenses.util.calculateRealExchangeRate
 import org.totschnig.myexpenses.util.convAmount
 import org.totschnig.myexpenses.util.isolateText
@@ -119,7 +120,6 @@ import org.totschnig.myexpenses.viewmodel.data.Currency
 import org.totschnig.myexpenses.viewmodel.data.FullAccount
 import java.text.DecimalFormat
 import kotlin.math.absoluteValue
-import kotlin.math.roundToLong
 
 const val SIGMA = "Σ"
 
@@ -130,6 +130,7 @@ sealed class AccountEvent {
     data object ToggleSealed : AccountEvent()
     data object ToggleExcludeFromTotals : AccountEvent()
     data object ToggleDynamicExchangeRate : AccountEvent()
+    data class ViewPriceHistory(val commodity: String) : AccountEvent()
 }
 
 interface AccountEventHandler {
@@ -230,6 +231,8 @@ fun AccountListV2(
     onEvent: AccountEventHandler,
     bankIcon: (@Composable (Modifier, Long) -> Unit)? = null,
     flags: List<AccountFlag> = emptyList(),
+    showPremiumNudge: Boolean = false,
+    onUpgrade: () -> Unit = {},
 ) {
 
     val context = LocalContext.current
@@ -259,6 +262,11 @@ fun AccountListV2(
             bottom = scaffoldPadding.calculateBottomPadding() + dimensionResource(R.dimen.fab_related_bottom_padding)
         )
     ) {
+        if (showPremiumNudge) {
+            item(key = "premium_nudge") {
+                PremiumNudgeCard(onUpgrade = onUpgrade)
+            }
+        }
         sortedGroupKeys.forEachIndexed { index, groupKey ->
             val group = grouped.getValue(groupKey)
             val headerId = groupKey.id.toString()
@@ -649,9 +657,12 @@ fun AccountCardV2(
                         }
                         .padding(start = 48.dp, end = 4.dp, bottom = 8.dp)
                 ) {
-                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
                         if (account.isPortfolio) {
-                            PortfolioInventory(account)
+                            PortfolioInventory(account, onAccountEvent = onEvent)
                         } else {
                             AccountSummaryV2(account = account, onDisplayBalanceTypeChange = null)
                         }
@@ -675,9 +686,15 @@ fun AccountCardV2(
 @Composable
 fun PortfolioInventory(
     portfolio: FullAccount,
+    onAccountEvent: AccountEventHandler,
 ) {
-    // 2. Asset Rows
-    portfolio.children.forEachIndexed { index, asset ->
+    val fXFormat = remember { DecimalFormat("#.############") }
+    val sortedChildren = remember(portfolio.children) {
+        portfolio.children.sortedWith(
+            compareBy<FullAccount> { it.isPortfolioCash }.thenBy { it.label }
+        )
+    }
+    sortedChildren.forEach { asset ->
         Row(
             modifier = Modifier
                 .fillMaxWidth(),
@@ -688,19 +705,76 @@ fun PortfolioInventory(
                 modifier = Modifier.weight(1f)
             )
 
-            Column(horizontalAlignment = Alignment.End) {
+            val isAsset = asset.currencyUnit != portfolio.currencyUnit
+            Column(
+                horizontalAlignment = Alignment.End,
+                modifier = Modifier
+                    .conditional(isAsset) {
+                        clickable {
+                            onAccountEvent(
+                                AccountEvent.ViewPriceHistory(
+                                    asset.currencyUnit.code
+                                ),
+                                portfolio
+                            )
+                        }
+                    }
+            ) {
                 // Corrected Valuation in Portfolio Currency
                 AmountText(
                     amount = asset.equivalentCurrentBalance,
                     currency = portfolio.currencyUnit,
                 )
                 // Quantity in Asset Units
-                if (asset.currencyUnit != portfolio.currencyUnit) {
-                    AmountText(
-                        amount = asset.currentBalance,
-                        currency = asset.currencyUnit,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                if (isAsset) {
+
+                    asset.latestExchangeRate?.let { (_, rate) ->
+                        val realRate = calculateRealExchangeRate(
+                            rate,
+                            asset.currencyUnit,
+                            portfolio.currencyUnit
+                        )
+                        val priceFormatted = fXFormat.format(realRate)
+                        val quantityFormatted = LocalCurrencyFormatter.current.convAmount(
+                            asset.currentBalance,
+                            asset.currencyUnit
+                        ) {
+                            it.decimalFormatSymbols = it.decimalFormatSymbols.apply {
+                                currencySymbol = ""
+                            }
+                        }
+
+                        val priceMarker = "[[PRICE]]"
+                        val localizedLayout = stringResource(
+                            R.string.asset_quantity_at_price,
+                            quantityFormatted,
+                            priceMarker
+                        )
+
+                        val annotatedString = buildAnnotatedString {
+                            val priceIndex = localizedLayout.indexOf(priceMarker)
+                            if (priceIndex != -1) {
+                                append(localizedLayout.substring(0, priceIndex))
+                                withStyle(
+                                    style = SpanStyle(
+                                        textDecoration = TextDecoration.Underline,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                ) {
+                                    append(priceFormatted)
+                                }
+                                append(localizedLayout.substring(priceIndex + priceMarker.length))
+                            } else {
+                                append(localizedLayout)
+                            }
+                        }
+
+                        Text(
+                            text = annotatedString,
+                            style = MaterialTheme.typography.labelSmall
+                        )
+
+                    }
                 }
             }
         }
@@ -895,6 +969,7 @@ fun AccountCard(
 
                                 is AccountEvent.ToggleSealed -> onToggleSealed(account)
 
+                                is AccountEvent.ViewPriceHistory -> {}
                             }
                         }
                     },
@@ -1016,11 +1091,12 @@ fun AccountCard(
 fun AccountSummaryV2(
     account: BaseAccount,
     onDisplayBalanceTypeChange: ((BalanceType) -> Unit)? = null,
+    onAccountEvent: AccountEventHandler,
 ) {
 
     when (account) {
         is FullAccount -> if (account.isPortfolio)
-            PortfolioInventory(account)
+            PortfolioInventory(account, onAccountEvent)
         else
             AccountSummaryV2(
                 account,
@@ -1416,7 +1492,7 @@ private fun PortfolioPreview() {
     AccountCardV2(
         isExpanded = true,
         account = FullAccount(
-            isPortfolio = true,
+            portfolioRole = PORTFOLIO_CONTAINER,
             id = 1,
             label = "My Portfolio",
             currencyUnit = CurrencyUnit.DebugInstance,

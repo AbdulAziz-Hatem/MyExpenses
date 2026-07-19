@@ -44,14 +44,14 @@ import org.totschnig.myexpenses.provider.KEY_TYPE
 import org.totschnig.myexpenses.provider.KEY_TYPE_SORT_KEY
 import org.totschnig.myexpenses.provider.KEY_UUID
 import org.totschnig.myexpenses.provider.KEY_VISIBLE
-import org.totschnig.myexpenses.provider.PORTFOLIO_CONTAINER
+import org.totschnig.myexpenses.provider.PORTFOLIO_NONE
 import org.totschnig.myexpenses.provider.getBoolean
 import org.totschnig.myexpenses.provider.getDoubleIfExists
 import org.totschnig.myexpenses.provider.getEnum
 import org.totschnig.myexpenses.provider.getInt
+import org.totschnig.myexpenses.provider.getIntIfExistsOr0
 import org.totschnig.myexpenses.provider.getLong
 import org.totschnig.myexpenses.provider.getLongIfExists
-import org.totschnig.myexpenses.provider.getLongOrNull
 import org.totschnig.myexpenses.provider.getString
 import org.totschnig.myexpenses.provider.getStringOrNull
 import org.totschnig.myexpenses.viewmodel.data.DistributionAccountInfo
@@ -81,8 +81,7 @@ data class Account(
     val bankId: Long? = null,
     val dynamicExchangeRates: Boolean = false,
     val parentId: Long? = null,
-    val isPortfolio: Boolean = false,
-    val isPortfolioAsset: Boolean = false,
+    val portfolioRole: Int = PORTFOLIO_NONE,
     override val accountGrouping: AccountGrouping<*>? =  null
 ) : DataBaseAccount(), Serializable, DistributionAccountInfo {
 
@@ -190,8 +189,8 @@ data class Account(
                 sortDirection = cursor.getEnum(KEY_SORT_DIRECTION, SortDirection.DESC),
                 bankId = cursor.getLongIfExists(KEY_BANK_ID),
                 dynamicExchangeRates = cursor.getBoolean(KEY_DYNAMIC),
-                parentId = cursor.getLongOrNull(KEY_PARENTID),
-                isPortfolio = cursor.getInt(KEY_IS_PORTFOLIO) == PORTFOLIO_CONTAINER
+                parentId = cursor.getLongIfExists(KEY_PARENTID),
+                portfolioRole = cursor.getIntIfExistsOr0(KEY_IS_PORTFOLIO)
             )
         }
     }
