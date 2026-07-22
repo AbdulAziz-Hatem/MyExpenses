@@ -4,14 +4,17 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ListItem
@@ -30,17 +33,20 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.apache.commons.csv.CSVFormat
 import org.apache.commons.csv.CSVParser
+import org.apache.commons.csv.CSVRecord
 import org.totschnig.myexpenses.R
 import org.totschnig.myexpenses.export.qif.QifDateFormat
 import org.totschnig.myexpenses.export.qif.QifUtils
@@ -53,12 +59,13 @@ import org.totschnig.myexpenses.viewmodel.data.TradeIntent
 import org.totschnig.myexpenses.viewmodel.data.TradeType
 import java.io.InputStreamReader
 import java.math.BigDecimal
+import java.math.RoundingMode
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ImportTradesDialog(
     onDismiss: () -> Unit,
-    onImport: (List<TradeIntent>) -> Unit,
+    onImport: suspend (List<TradeIntent>, (Int) -> Unit) -> Unit,
     portfolio: FullAccount,
     assets: List<CurrencyUnit>,
     fundingAccounts: List<Pair<Long, String>>,
@@ -67,15 +74,24 @@ fun ImportTradesDialog(
     var fundingSource by remember { mutableStateOf(FundingSource.PORTFOLIO) }
     var fundingAccountId by remember { mutableStateOf<Long?>(null) }
     var dateFormat by remember { mutableStateOf(QifDateFormat.default) }
-    var parsedIntents by remember { mutableStateOf<List<TradeIntent>?>(null) }
-    var failedCount by remember { mutableIntStateOf(0) }
+    var parseResult by remember { mutableStateOf<ImportTradesParseResult?>(null) }
+    var isImporting by remember { mutableStateOf(false) }
+    var importProgress by remember { mutableIntStateOf(0) }
 
     val statusMessages = listOfNotNull(
-        parsedIntents?.takeIf { it.isNotEmpty() }?.size?.let {
+        parseResult?.intents?.takeIf { it.isNotEmpty() }?.size?.let {
             pluralStringResource(R.plurals.import_prices_success_message, it, it)
         },
-        failedCount.takeIf { it > 0 }?.let {
+        parseResult?.parseFailures?.takeIf { it > 0 }?.let {
             pluralStringResource(R.plurals.import_prices_failure_message, it, it)
+        },
+        parseResult?.missingAssets?.takeIf { it.isNotEmpty() }?.let { missing ->
+            val count = missing.values.sum()
+            val assets = missing.keys.joinToString(", ")
+            pluralStringResource(R.plurals.import_trades_missing_assets_message, count, count, assets)
+        },
+        parseResult?.takeIf { it.intents.isEmpty() && it.parseFailures == 0 && it.missingAssets.isEmpty() }?.let {
+            stringResource(R.string.no_data)
         }
     )
 
@@ -90,7 +106,13 @@ fun ImportTradesDialog(
         selectedUri = uri
     }
 
-    Dialog(onDismissRequest = onDismiss) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            dismissOnBackPress = !isImporting,
+            dismissOnClickOutside = !isImporting
+        )
+    ) {
         Surface(
             shape = MaterialTheme.shapes.large,
             tonalElevation = 6.dp
@@ -101,8 +123,8 @@ fun ImportTradesDialog(
                     .fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                val currentIntents = parsedIntents
-                if (currentIntents == null) {
+                val currentResult = parseResult
+                if (currentResult == null || currentResult.intents.isEmpty()) {
                     Text(
                         text = stringResource(R.string.menu_import),
                         style = MaterialTheme.typography.headlineSmall
@@ -178,7 +200,7 @@ fun ImportTradesDialog(
                                 val uri = selectedUri
                                 if (uri != null) {
                                     scope.launch {
-                                        val (intents, failed) = parseCsv(
+                                        parseResult = parseCsv(
                                             context,
                                             uri,
                                             assets,
@@ -186,10 +208,6 @@ fun ImportTradesDialog(
                                             fundingAccountId,
                                             dateFormat
                                         )
-                                        if (intents.isNotEmpty()) {
-                                            failedCount = failed
-                                            parsedIntents = intents
-                                        }
                                     }
                                 }
                             },
@@ -224,7 +242,7 @@ fun ImportTradesDialog(
                             .weight(1f, fill = false)
                             .height(300.dp)
                     ) {
-                        items(currentIntents) { intent ->
+                        items(currentResult.intents) { intent ->
                             ListItem(
                                 headlineContent = {
                                     Text("${intent.targetAsset.description} (${intent.targetAsset.code})")
@@ -233,7 +251,10 @@ fun ImportTradesDialog(
                                     Text("${intent.date.toLocalDate()} - ${stringResource(intent.type.label)}")
                                 },
                                 trailingContent = {
-                                    Text(intent.quantity.toString())
+                                    Column(horizontalAlignment = Alignment.End) {
+                                        Text(intent.quantity.toString() + " x")
+                                        Text(intent.price.toString())
+                                    }
                                 }
                             )
                             HorizontalDivider()
@@ -244,22 +265,43 @@ fun ImportTradesDialog(
                         modifier = Modifier.fillMaxWidth(),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
+                        if (isImporting) {
+                            Box(
+                                modifier = Modifier.fillMaxWidth(),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(48.dp)
+                                )
+                                Text(
+                                    text = "$importProgress/${currentResult.intents.size}",
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                            }
+                        }
+
                         Button(
                             onClick = {
-                                onImport(currentIntents)
-                                onDismiss()
+                                scope.launch {
+                                    isImporting = true
+                                    onImport(currentResult.intents) { progress ->
+                                        importProgress = progress
+                                    }
+                                    onDismiss()
+                                }
                             },
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier.fillMaxWidth(),
+                            enabled = !isImporting
                         ) {
                             Text(stringResource(R.string.menu_import))
                         }
 
                         OutlinedButton(
                             onClick = {
-                                parsedIntents = null
-                                failedCount = 0
+                                parseResult = null
                             },
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier.fillMaxWidth(),
+                            enabled = !isImporting
                         ) {
                             Text(stringResource(R.string.menu_back))
                         }
@@ -270,6 +312,12 @@ fun ImportTradesDialog(
     }
 }
 
+data class ImportTradesParseResult(
+    val intents: List<TradeIntent>,
+    val parseFailures: Int,
+    val missingAssets: Map<String, Int>
+)
+
 private suspend fun parseCsv(
     context: android.content.Context,
     uri: Uri,
@@ -277,61 +325,107 @@ private suspend fun parseCsv(
     fundingSource: FundingSource,
     fundingAccountId: Long?,
     dateFormat: QifDateFormat,
-): Pair<List<TradeIntent>, Int> = withContext(Dispatchers.IO) {
+): ImportTradesParseResult = withContext(Dispatchers.IO) {
     val intents = mutableListOf<TradeIntent>()
     val assetMap = assets.associateBy { it.code }
-    var failedCount = 0
+    var parseFailures = 0
+    val missingAssets = mutableMapOf<String, Int>()
 
     try {
         context.contentResolver.openInputStream(uri)?.use { inputStream ->
             val reader = InputStreamReader(inputStream)
             val format = CSVFormat.DEFAULT.builder()
                 .setIgnoreSurroundingSpaces(true)
-                .setHeader("Date", "Type", "Asset", "Quantity", "Price", "Fee")
+                .setHeader()
                 .setSkipHeaderRecord(true)
                 .get()
             val parser = CSVParser.parse(reader, format)
 
             for (record in parser) {
                 try {
-                    val dateStr = record.get("Date") ?: continue
-                    val typeStr = record.get("Type") ?: continue
-                    val assetCode = record.get("Asset") ?: continue
+                    val dateStr = record.getSafe("Date") ?: continue
+                    val typeStr = record.getSafe("Type") ?: continue
+                    val assetCode = record.getSafe("Asset") ?: continue
+
+                    val asset = assetMap[assetCode]
+                    if (asset == null) {
+                        missingAssets[assetCode] = (missingAssets[assetCode] ?: 0) + 1
+                        continue
+                    }
 
                     val date = QifUtils.parseDate(dateStr, dateFormat)
                     val type = when (typeStr.uppercase()) {
                         "BUY", "B" -> TradeType.AssetTrade.BUY
                         "SELL", "S" -> TradeType.AssetTrade.SELL
-                        else -> continue
+                        else -> {
+                            parseFailures++
+                            continue
+                        }
                     }
 
-                    val asset = assetMap[assetCode] ?: continue
+                    val quantity = record.getSafe("Quantity", "Qty")?.toBigDecimalOrNull()
+                    val price = record.getSafe("Price", "Unit Price")?.toBigDecimalOrNull()
+                    val total = record.getSafe("Total", "Principal", "Value")?.toBigDecimalOrNull()
+                    val fee = record.getSafe("Fee", "Commission")?.toBigDecimalOrNull() ?: BigDecimal.ZERO
 
-                    val quantity = record.get("Quantity")?.toBigDecimalOrNull() ?: BigDecimal.ZERO
-                    val price = record.get("Price")?.toBigDecimalOrNull() ?: BigDecimal.ZERO
-                    val fee = record.get("Fee")?.toBigDecimalOrNull() ?: BigDecimal.ZERO
+                    val finalQuantity: BigDecimal
+                    val finalPrice: BigDecimal
+                    val finalPrincipal: BigDecimal
+
+                    when {
+                        quantity != null && price != null -> {
+                            finalQuantity = quantity
+                            finalPrice = price
+                            finalPrincipal = quantity.multiply(price)
+                        }
+                        quantity != null && total != null && quantity.signum() != 0 -> {
+                            finalQuantity = quantity
+                            finalPrice = total.divide(quantity, 10, RoundingMode.HALF_UP)
+                            finalPrincipal = total
+                        }
+                        price != null && total != null && price.signum() != 0 -> {
+                            finalQuantity = total.divide(price, 10, RoundingMode.HALF_UP)
+                            finalPrice = price
+                            finalPrincipal = total
+                        }
+                        else -> {
+                            parseFailures++
+                            continue
+                        }
+                    }
 
                     intents.add(
                         TradeIntent(
                             targetAsset = asset,
                             type = type,
                             date = epochMillis2LocalDateTime(date.time),
-                            quantity = quantity,
-                            price = price,
+                            quantity = finalQuantity,
+                            price = finalPrice,
+                            principal = finalPrincipal,
                             fundingSource = fundingSource,
                             fundingAccountId = fundingAccountId,
                             fee = fee
                         )
                     )
                 } catch (_: Exception) {
-                    failedCount++
+                    parseFailures++
                 }
             }
         }
     } catch (e: Exception) {
         CrashHandler.report(e)
     }
-    intents to failedCount
+    ImportTradesParseResult(intents, parseFailures, missingAssets)
+}
+
+private fun CSVRecord.getSafe(vararg names: String): String? {
+    for (name in names) {
+        if (isMapped(name)) return get(name)
+        // Also check case-insensitive
+        val mappedName = parser.headerNames.find { it.equals(name, ignoreCase = true) }
+        if (mappedName != null) return get(mappedName)
+    }
+    return null
 }
 
 private fun String.toBigDecimalOrNull(): BigDecimal? = try {
